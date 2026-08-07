@@ -37,6 +37,10 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 MAX_OUTPUT_SIZE = 2048
+# Limit expensive pixel-by-pixel analysis on low-CPU hosting. The UI exports
+# at up to 400 px, so 512 px retains clean edges while preventing Gunicorn
+# request timeouts on Render Free.
+PROCESSING_MAX_DIMENSION = 512
 HEX_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 RESAMPLING_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
@@ -365,29 +369,42 @@ def process_icon_image(
     """
     Remove or recolor a flat icon background while preserving the illustration.
 
-    The detector handles the common combinations used by icon packs:
-    - a colored circle on a white square;
-    - a flat rectangular background;
-    - a colored circle on transparent corners;
-    - already-transparent foreground artwork.
+    Background analysis is performed on a bounded working image rather than on
+    every pixel of a potentially huge source PNG. This keeps previews fast on
+    low-CPU hosting while retaining enough resolution for clean edge masks.
     """
     with Image.open(image_path) as source:
-        image = source.convert("RGBA")
+        source_image = source.convert("RGBA")
 
+    output_width = width or source_image.width
+    output_height = height or source_image.height
+    output_size = (output_width, output_height)
+
+    # A plain resize does not need any background analysis.
     if not remove_background and background_color is None:
-        result = image
-        if width is not None or height is not None:
-            output_width = width or result.width
-            output_height = height or result.height
-            result = result.resize(
-                (output_width, output_height),
-                RESAMPLING_LANCZOS,
-            )
+        result = source_image
+        if result.size != output_size:
+            result = result.resize(output_size, RESAMPLING_LANCZOS)
 
         output = io.BytesIO()
-        result.save(output, format="PNG", optimize=True)
+        result.save(output, format="PNG", compress_level=6)
         output.seek(0)
         return output
+
+    # Process at no less than 256px for mask quality, but never above 512px so
+    # large source files cannot exhaust a free Render instance or hit a worker
+    # timeout. The current UI requests at most 400px outputs.
+    requested_long_side = max(output_size)
+    working_long_side = min(512, max(256, requested_long_side))
+    scale = working_long_side / requested_long_side
+    working_size = (
+        max(16, round(output_width * scale)),
+        max(16, round(output_height * scale)),
+    )
+
+    image = source_image
+    if image.size != working_size:
+        image = image.resize(working_size, RESAMPLING_LANCZOS)
 
     pixel_data = list(image.getdata())
     image_width, image_height = image.size
@@ -434,8 +451,6 @@ def process_icon_image(
     inner_color: tuple[int, int, int] | None = None
     minimum_opaque_ring = max(12, round(len(inner_indexes) * 0.25))
     if inner_candidates and opaque_ring_samples >= minimum_opaque_ring:
-        # Prefer a background color distinct from the outer white/neutral margin
-        # when a sufficiently common alternative exists.
         inner_color = inner_candidates[0][0]
         if outer_color is not None and color_distance_squared(
             inner_color, outer_color
@@ -492,8 +507,6 @@ def process_icon_image(
 
         if inner_coverage > 0:
             if colors_are_distinct:
-                # Typical colored-circle-on-white-square asset: recolor the
-                # circle and make the outside square transparent.
                 result = replace_with_color(
                     result,
                     pillow_mask(inner_mask, result.size),
@@ -518,22 +531,16 @@ def process_icon_image(
                 background_color,
             )
         else:
-            # No embedded flat background was found. The artwork is probably
-            # already transparent, so place the requested color behind it.
             result = add_color_behind_transparent_artwork(
                 result, background_color
             )
 
-    if width is not None or height is not None:
-        output_width = width or result.width
-        output_height = height or result.height
-        result = result.resize(
-            (output_width, output_height),
-            RESAMPLING_LANCZOS,
-        )
+    if result.size != output_size:
+        result = result.resize(output_size, RESAMPLING_LANCZOS)
 
     output = io.BytesIO()
-    result.save(output, format="PNG", optimize=True)
+    # optimize=True is CPU-heavy; normal compression is faster and reliable.
+    result.save(output, format="PNG", compress_level=6)
     output.seek(0)
     return output
 
@@ -648,4 +655,4 @@ if __name__ == "__main__":
     ICONS_DIR.mkdir(parents=True, exist_ok=True)
     port = int(os.environ.get("PORT", "5000"))
     debug = os.environ.get("FLASK_DEBUG", "1") == "1"
-    app.run(host="127.0.0.1", port=port, debug=debug, use_reloader=False)
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
