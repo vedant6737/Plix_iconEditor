@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import gc
 import io
 import math
 import os
 import re
+import threading
 from collections import defaultdict, deque
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -36,11 +39,13 @@ TEMPLATE_DIR = (
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
-MAX_OUTPUT_SIZE = 2048
-# Limit expensive pixel-by-pixel analysis on low-CPU hosting. The UI exports
-# at up to 400 px, so 512 px retains clean edges while preventing Gunicorn
-# request timeouts on Render Free.
-PROCESSING_MAX_DIMENSION = 512
+MAX_OUTPUT_SIZE = 1024
+# Keep CPU and memory bounded on small hosting instances. The UI exports at
+# up to 400 px, so a 384 px working mask keeps edges clean without analysing
+# every pixel of a potentially very large source file.
+PROCESSING_MIN_DIMENSION = 192
+PROCESSING_MAX_DIMENSION = 384
+PROCESSING_LOCK = threading.Lock()
 HEX_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 RESAMPLING_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
@@ -278,24 +283,41 @@ def connected_color_mask(
         x = index % width
         y = index // width
 
-        neighbours: list[int] = []
         if x > 0:
-            neighbours.append(index - 1)
-        if x + 1 < width:
-            neighbours.append(index + 1)
-        if y > 0:
-            neighbours.append(index - width)
-        if y + 1 < height:
-            neighbours.append(index + width)
+            neighbour = index - 1
+            if not visited[neighbour]:
+                visited[neighbour] = 1
+                strength = mask_strength(neighbour)
+                if strength:
+                    mask[neighbour] = strength
+                    queue.append(neighbour)
 
-        for neighbour in neighbours:
-            if visited[neighbour]:
-                continue
-            visited[neighbour] = 1
-            strength = mask_strength(neighbour)
-            if strength:
-                mask[neighbour] = strength
-                queue.append(neighbour)
+        if x + 1 < width:
+            neighbour = index + 1
+            if not visited[neighbour]:
+                visited[neighbour] = 1
+                strength = mask_strength(neighbour)
+                if strength:
+                    mask[neighbour] = strength
+                    queue.append(neighbour)
+
+        if y > 0:
+            neighbour = index - width
+            if not visited[neighbour]:
+                visited[neighbour] = 1
+                strength = mask_strength(neighbour)
+                if strength:
+                    mask[neighbour] = strength
+                    queue.append(neighbour)
+
+        if y + 1 < height:
+            neighbour = index + width
+            if not visited[neighbour]:
+                visited[neighbour] = 1
+                strength = mask_strength(neighbour)
+                if strength:
+                    mask[neighbour] = strength
+                    queue.append(neighbour)
 
     return mask
 
@@ -311,10 +333,20 @@ def combine_masks(*masks: bytearray) -> bytearray:
     usable_masks = [mask for mask in masks if mask]
     if not usable_masks:
         return bytearray()
+    if len(usable_masks) == 1:
+        return bytearray(usable_masks[0])
+    if len(usable_masks) == 2:
+        first, second = usable_masks
+        return bytearray(
+            left if left >= right else right
+            for left, right in zip(first, second)
+        )
 
-    combined = bytearray(len(usable_masks[0]))
-    for index in range(len(combined)):
-        combined[index] = max(mask[index] for mask in usable_masks)
+    combined = bytearray(usable_masks[0])
+    for mask in usable_masks[1:]:
+        for index, value in enumerate(mask):
+            if value > combined[index]:
+                combined[index] = value
     return combined
 
 
@@ -367,46 +399,67 @@ def process_icon_image(
     background_color: tuple[int, int, int] | None = None,
 ) -> io.BytesIO:
     """
-    Remove or recolor a flat icon background while preserving the illustration.
+    Remove or recolor a flat icon background with bounded CPU and memory use.
 
-    Background analysis is performed on a bounded working image rather than on
-    every pixel of a potentially huge source PNG. This keeps previews fast on
-    low-CPU hosting while retaining enough resolution for clean edge masks.
+    Expensive analysis runs on a small working copy. The full-resolution source
+    is not converted to RGBA before resizing, which keeps peak memory low for
+    large PNG files on small hosting instances.
     """
     with Image.open(image_path) as source:
-        source_image = source.convert("RGBA")
+        source_width, source_height = source.size
+        output_width = width or source_width
+        output_height = height or source_height
+        output_size = (output_width, output_height)
 
-    output_width = width or source_image.width
-    output_height = height or source_image.height
-    output_size = (output_width, output_height)
+        # A plain resize needs no background analysis.
+        if not remove_background and background_color is None:
+            if source.size != output_size:
+                resized = source.resize(output_size, RESAMPLING_LANCZOS)
+            else:
+                resized = source.copy()
+            result = resized.convert("RGBA")
+        else:
+            requested_long_side = max(output_size)
+            working_long_side = min(
+                PROCESSING_MAX_DIMENSION,
+                max(PROCESSING_MIN_DIMENSION, requested_long_side),
+            )
+            scale = working_long_side / requested_long_side
+            working_size = (
+                max(16, round(output_width * scale)),
+                max(16, round(output_height * scale)),
+            )
 
-    # A plain resize does not need any background analysis.
-    if not remove_background and background_color is None:
-        result = source_image
-        if result.size != output_size:
-            result = result.resize(output_size, RESAMPLING_LANCZOS)
+            if source.size != working_size:
+                resized = source.resize(working_size, RESAMPLING_LANCZOS)
+            else:
+                resized = source.copy()
+            image = resized.convert("RGBA")
+            result = _process_working_image(
+                image,
+                remove_background=remove_background,
+                background_color=background_color,
+            )
 
-        output = io.BytesIO()
-        result.save(output, format="PNG", compress_level=6)
-        output.seek(0)
-        return output
+    if result.size != output_size:
+        result = result.resize(output_size, RESAMPLING_LANCZOS)
 
-    # Process at no less than 256px for mask quality, but never above 512px so
-    # large source files cannot exhaust a free Render instance or hit a worker
-    # timeout. The current UI requests at most 400px outputs.
-    requested_long_side = max(output_size)
-    working_long_side = min(512, max(256, requested_long_side))
-    scale = working_long_side / requested_long_side
-    working_size = (
-        max(16, round(output_width * scale)),
-        max(16, round(output_height * scale)),
-    )
+    output = io.BytesIO()
+    result.save(output, format="PNG", compress_level=4)
+    output.seek(0)
+    return output
 
-    image = source_image
-    if image.size != working_size:
-        image = image.resize(working_size, RESAMPLING_LANCZOS)
 
-    pixel_data = list(image.getdata())
+def _process_working_image(
+    image: Image.Image,
+    *,
+    remove_background: bool,
+    background_color: tuple[int, int, int] | None,
+) -> Image.Image:
+    """Run mask analysis on an already bounded RGBA working image."""
+    # ImagingCore is indexable, so avoid materialising a large Python list of
+    # per-pixel tuples. This substantially reduces memory use.
+    pixel_data = image.getdata()
     image_width, image_height = image.size
     total_pixels = image_width * image_height
 
@@ -457,7 +510,8 @@ def process_icon_image(
         ) <= 44 * 44:
             for alternative_color, alternative_count in inner_candidates[1:]:
                 if (
-                    alternative_count >= max(8, round(opaque_ring_samples * 0.08))
+                    alternative_count
+                    >= max(8, round(opaque_ring_samples * 0.08))
                     and color_distance_squared(alternative_color, outer_color)
                     > 44 * 44
                 ):
@@ -535,14 +589,32 @@ def process_icon_image(
                 result, background_color
             )
 
-    if result.size != output_size:
-        result = result.resize(output_size, RESAMPLING_LANCZOS)
+    return result
 
-    output = io.BytesIO()
-    # optimize=True is CPU-heavy; normal compression is faster and reliable.
-    result.save(output, format="PNG", compress_level=6)
-    output.seek(0)
-    return output
+
+@lru_cache(maxsize=24)
+def cached_processed_bytes(
+    image_path_text: str,
+    image_mtime_ns: int,
+    width: int,
+    height: int,
+    remove_background: bool,
+    background_color: tuple[int, int, int] | None,
+) -> bytes:
+    """Serialize expensive processing and cache recent previews."""
+    del image_mtime_ns  # Included in the key so changed files invalidate cache.
+    with PROCESSING_LOCK:
+        stream = process_icon_image(
+            image_path=Path(image_path_text),
+            width=width or None,
+            height=height or None,
+            remove_background=remove_background,
+            background_color=background_color,
+        )
+        data = stream.getvalue()
+        stream.close()
+        gc.collect()
+        return data
 
 
 def icon_record(icon: dict[str, object]) -> dict[str, object]:
@@ -557,6 +629,11 @@ def icon_record(icon: dict[str, object]) -> dict[str, object]:
 @app.get("/")
 def home():
     return render_template("index.html")
+
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"})
 
 
 @app.get("/api/search")
@@ -622,13 +699,15 @@ def process_icon(icon_id: str):
         background_color = None
 
     try:
-        image_stream = process_icon_image(
-            image_path=image_path,
-            width=width,
-            height=height,
-            remove_background=remove_background,
-            background_color=background_color,
+        image_bytes = cached_processed_bytes(
+            str(image_path),
+            image_path.stat().st_mtime_ns,
+            width or 0,
+            height or 0,
+            remove_background,
+            background_color,
         )
+        image_stream = io.BytesIO(image_bytes)
     except (OSError, UnidentifiedImageError) as error:
         return jsonify({"error": f"Could not read image: {error}"}), 500
     except Exception as error:  # Keeps the image endpoint useful in production.
@@ -654,5 +733,5 @@ def process_icon(icon_id: str):
 if __name__ == "__main__":
     ICONS_DIR.mkdir(parents=True, exist_ok=True)
     port = int(os.environ.get("PORT", "5000"))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)

@@ -447,6 +447,8 @@
             let iconsDataCache = [];
             let previewSequence = 0;
             let previewTimer = null;
+            let previewInFlight = false;
+            let previewQueued = false;
 
             const iconGrid = document.getElementById("iconGrid");
             const searchBox = document.getElementById("searchBox");
@@ -507,68 +509,168 @@
                 sizeValue.textContent = String(iconSize);
             }
 
-            function drawUrlToCanvas(canvas, url, targetSize, sequence) {
-                const context = canvas.getContext("2d");
-                const image = new Image();
-                image.decoding = "async";
-
-                image.onload = () => {
-                    if (sequence !== previewSequence) {
-                        return;
-                    }
-
-                    canvas.width = targetSize;
-                    canvas.height = targetSize;
-                    context.clearRect(0, 0, targetSize, targetSize);
-                    context.imageSmoothingEnabled = true;
-                    context.imageSmoothingQuality = "high";
-                    context.drawImage(image, 0, 0, targetSize, targetSize);
-
-                    canvas.hidden = false;
-                    placeholderText.hidden = true;
-                    downloadBtn.disabled = false;
-                    setPreviewStatus(`${targetSize} x ${targetSize} PNG`);
-                };
-
-                image.onerror = () => {
-                    if (sequence !== previewSequence) {
-                        return;
-                    }
-
-                    canvas.hidden = true;
-                    placeholderText.hidden = false;
-                    placeholderText.textContent =
-                        "The image could not be loaded. Confirm that the PNG exists in the icons folder and that Flask is running.";
-                    downloadBtn.disabled = true;
-                    setPreviewStatus("Preview failed", true);
-                };
-
-                image.src = url;
+            function wait(milliseconds) {
+                return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
             }
 
-            function renderLivePreview() {
+            async function fetchWithRetry(url, options = {}, attempts = 2) {
+                let lastResponse = null;
+                let lastError = null;
+
+                for (let attempt = 0; attempt < attempts; attempt += 1) {
+                    try {
+                        const response = await fetch(url, options);
+                        lastResponse = response;
+                        if (![502, 503, 504].includes(response.status)) {
+                            return response;
+                        }
+                    } catch (error) {
+                        lastError = error;
+                    }
+
+                    if (attempt + 1 < attempts) {
+                        await wait(1200 * (attempt + 1));
+                    }
+                }
+
+                if (lastResponse) {
+                    return lastResponse;
+                }
+                throw lastError || new Error("The server could not be reached");
+            }
+
+            function drawBlobToCanvas(canvas, blob, targetSize) {
+                return new Promise((resolve, reject) => {
+                    const context = canvas.getContext("2d");
+                    const objectUrl = URL.createObjectURL(blob);
+                    const image = new Image();
+                    image.decoding = "async";
+
+                    image.onload = () => {
+                        try {
+                            canvas.width = targetSize;
+                            canvas.height = targetSize;
+                            context.clearRect(0, 0, targetSize, targetSize);
+                            context.imageSmoothingEnabled = true;
+                            context.imageSmoothingQuality = "high";
+                            context.drawImage(image, 0, 0, targetSize, targetSize);
+                            resolve();
+                        } finally {
+                            URL.revokeObjectURL(objectUrl);
+                        }
+                    };
+
+                    image.onerror = () => {
+                        URL.revokeObjectURL(objectUrl);
+                        reject(new Error("The processed PNG could not be decoded"));
+                    };
+
+                    image.src = objectUrl;
+                });
+            }
+
+            async function responseError(response) {
+                let detail = `HTTP ${response.status}`;
+                const contentType = response.headers.get("content-type") || "";
+
+                if (contentType.includes("application/json")) {
+                    try {
+                        const payload = await response.json();
+                        if (payload && payload.error) {
+                            detail += `: ${payload.error}`;
+                        }
+                    } catch (error) {
+                        console.debug("Could not parse server error", error);
+                    }
+                }
+
+                return new Error(detail);
+            }
+
+            async function renderLivePreview() {
                 updateSizeLabel();
 
                 if (!selectedIcon) {
                     return;
                 }
 
+                // Never send multiple CPU-heavy preview requests from the same
+                // browser at once. Keep only the newest requested settings.
+                if (previewInFlight) {
+                    previewQueued = true;
+                    setPreviewStatus("Waiting for current preview...");
+                    return;
+                }
+
+                previewInFlight = true;
+                previewQueued = false;
+
                 const sequence = ++previewSequence;
+                const iconSnapshot = selectedIcon;
+                const sizeSnapshot = iconSize;
+                const url = processUrl(iconSnapshot, sizeSnapshot);
+
                 setPreviewStatus("Processing...");
                 downloadBtn.disabled = true;
 
-                drawUrlToCanvas(
-                    liveCanvas,
-                    processUrl(selectedIcon, iconSize),
-                    iconSize,
-                    sequence
-                );
+                try {
+                    const response = await fetchWithRetry(
+                        url,
+                        {
+                            headers: { Accept: "image/png" },
+                            cache: "no-store",
+                        },
+                        2
+                    );
+
+                    if (!response.ok) {
+                        throw await responseError(response);
+                    }
+
+                    const blob = await response.blob();
+                    await drawBlobToCanvas(liveCanvas, blob, sizeSnapshot);
+
+                    const settingsChanged =
+                        !selectedIcon ||
+                        selectedIcon.id !== iconSnapshot.id ||
+                        iconSize !== sizeSnapshot ||
+                        processUrl(selectedIcon, iconSize) !== url;
+
+                    if (settingsChanged) {
+                        previewQueued = true;
+                    } else if (sequence === previewSequence) {
+                        liveCanvas.hidden = false;
+                        placeholderText.hidden = true;
+                        downloadBtn.disabled = false;
+                        setPreviewStatus(`${sizeSnapshot} x ${sizeSnapshot} PNG`);
+                    }
+                } catch (error) {
+                    console.error("Preview request failed", error);
+                    if (!previewQueued) {
+                        liveCanvas.hidden = true;
+                        placeholderText.hidden = false;
+                        placeholderText.textContent =
+                            error.message.includes("HTTP 502") ||
+                            error.message.includes("HTTP 503") ||
+                            error.message.includes("HTTP 504")
+                                ? "The server is restarting or busy. Wait a few seconds and select the icon again."
+                                : `Preview failed: ${error.message}`;
+                        downloadBtn.disabled = true;
+                        setPreviewStatus("Preview failed", true);
+                    }
+                } finally {
+                    previewInFlight = false;
+                    if (previewQueued) {
+                        previewQueued = false;
+                        window.setTimeout(renderLivePreview, 80);
+                    }
+                }
             }
 
             function schedulePreview() {
                 updateSizeLabel();
                 window.clearTimeout(previewTimer);
-                previewTimer = window.setTimeout(renderLivePreview, 90);
+                previewTimer = window.setTimeout(renderLivePreview, 350);
             }
 
             function formatIconName(filename) {
@@ -656,10 +758,14 @@
                 iconGrid.innerHTML = '<div class="no-results">Loading icon catalog...</div>';
 
                 try {
-                    const response = await fetch("/api/search", {
-                        headers: { Accept: "application/json" },
-                        cache: "no-store",
-                    });
+                    const response = await fetchWithRetry(
+                        "/api/search",
+                        {
+                            headers: { Accept: "application/json" },
+                            cache: "no-store",
+                        },
+                        3
+                    );
 
                     if (!response.ok) {
                         throw new Error(`Catalog request failed with status ${response.status}`);
@@ -678,7 +784,7 @@
                     const errorMessage = document.createElement("div");
                     errorMessage.className = "gallery-error";
                     errorMessage.textContent =
-                        "Could not load the icon catalog. Start app.py through Flask and refresh this page.";
+                        "Could not load the icon catalog. The hosted service may be waking up; wait a moment and refresh.";
                     iconGrid.appendChild(errorMessage);
                 }
             }
