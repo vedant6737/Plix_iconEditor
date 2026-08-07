@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plix Studio Icon Editor</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --accent: #00704a;
+            --accent-dark: #005f3d;
+            --border: #e2e8f0;
+            --muted: #64748b;
+            --surface: #ffffff;
+            --page: #f8fafc;
+            --danger: #b42318;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        body {
+            min-height: 100vh;
+            background: var(--page);
+            color: #0f172a;
+            display: flex;
+        }
+
+        button,
+        input {
+            font: inherit;
+        }
+
+        .sidebar {
+            width: 340px;
+            min-height: 100vh;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            padding: 32px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+            position: sticky;
+            top: 0;
+        }
+
+        .sidebar h2 {
+            font-size: 1.25rem;
+            font-weight: 750;
+            margin-bottom: 4px;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .main-workspace {
+            flex: 1;
+            min-width: 0;
+            padding: 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .search-bar {
+            width: 100%;
+            padding: 14px 20px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 15px;
+            outline: none;
+            background: var(--surface);
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+        }
+
+        .search-bar:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(0, 112, 74, 0.12);
+        }
+
+        .layout-body {
+            display: flex;
+            gap: 32px;
+            width: 100%;
+            align-items: flex-start;
+        }
+
+        .gallery-grid {
+            flex: 1.4;
+            min-width: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+            gap: 20px;
+        }
+
+        .icon-card {
+            min-height: 132px;
+            background: var(--surface);
+            padding: 20px 16px;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon-card:hover:not(:disabled),
+        .icon-card.active {
+            border-color: var(--accent);
+            box-shadow: 0 10px 18px -8px rgba(0, 112, 74, 0.25);
+            transform: translateY(-1px);
+        }
+
+        .icon-card:focus-visible {
+            outline: 3px solid rgba(0, 112, 74, 0.2);
+            outline-offset: 2px;
+        }
+
+        .icon-card:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
+        .icon-card img {
+            width: 72px;
+            height: 72px;
+            object-fit: contain;
+            display: block;
+        }
+
+        .icon-card p {
+            font-size: 0.8rem;
+            margin-top: 10px;
+            font-weight: 650;
+            color: #475569;
+            text-transform: capitalize;
+        }
+
+        .missing-label {
+            margin-top: 5px;
+            font-size: 0.7rem;
+            color: var(--danger);
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transition: opacity 0.2s ease;
+        }
+
+        .control-group label {
+            font-weight: 650;
+            font-size: 14px;
+            color: #334155;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .control-group label span {
+            color: var(--accent);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent);
+        }
+
+        input[type="color"] {
+            width: 100%;
+            height: 42px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            background: none;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        input[type="color"]:disabled {
+            cursor: not-allowed;
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: var(--page);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .checkbox-row input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+        }
+
+        .checkbox-row span {
+            font-size: 14px;
+            font-weight: 650;
+            color: #334155;
+        }
+
+        .preview-panel {
+            flex: 1;
+            min-width: 300px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+            position: sticky;
+            top: 32px;
+        }
+
+        .preview-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .preview-title-row h3 {
+            font-size: 15px;
+            font-weight: 750;
+        }
+
+        .preview-status {
+            font-size: 12px;
+            color: var(--muted);
+            min-height: 18px;
+            text-align: right;
+        }
+
+        .preview-status.error {
+            color: var(--danger);
+        }
+
+        .canvas-container {
+            height: 320px;
+            width: 100%;
+            margin-top: 16px;
+            border: 2px dashed #cbd5e1;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            background-color: #ffffff;
+            background-image:
+                linear-gradient(45deg, #e2e8f0 25%, transparent 25%),
+                linear-gradient(-45deg, #e2e8f0 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #e2e8f0 75%),
+                linear-gradient(-45deg, transparent 75%, #e2e8f0 75%);
+            background-size: 18px 18px;
+            background-position: 0 0, 0 9px, 9px -9px, -9px 0;
+        }
+
+        #liveCanvas {
+            max-width: 90%;
+            max-height: 90%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            image-rendering: auto;
+        }
+
+        #placeholderText {
+            max-width: 260px;
+            color: var(--muted);
+            font-size: 14px;
+            font-weight: 550;
+            line-height: 1.45;
+            text-align: center;
+            padding: 16px;
+        }
+
+        .download-btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 750;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: background 0.2s ease, transform 0.2s ease;
+            margin-top: auto;
+            box-shadow: 0 4px 12px rgba(0, 112, 74, 0.2);
+        }
+
+        .download-btn:hover:not(:disabled) {
+            background: var(--accent-dark);
+            transform: translateY(-1px);
+        }
+
+        .download-btn:disabled {
+            background: #cbd5e1;
+            color: #94a3b8;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        .no-results,
+        .gallery-error {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 40px;
+            color: var(--muted);
+            font-size: 15px;
+            background: var(--surface);
+            border: 1px dashed var(--border);
+            border-radius: 14px;
+        }
+
+        .gallery-error {
+            color: var(--danger);
+        }
+
+        @media (max-width: 980px) {
+            body {
+                display: block;
+            }
+
+            .sidebar {
+                position: static;
+                width: 100%;
+                min-height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .layout-body {
+                flex-direction: column-reverse;
+            }
+
+            .preview-panel {
+                position: static;
+                width: 100%;
+                min-width: 0;
+            }
+        }
+
+        @media (max-width: 620px) {
+            .sidebar,
+            .main-workspace {
+                padding: 22px 16px;
+            }
+
+            .gallery-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 12px;
+            }
+
+            .canvas-container {
+                height: 260px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <div>
+            <h2>Customizer Tool</h2>
+            <p class="subtitle">Server-side PNG background processor</p>
+        </div>
+
+        <div class="control-group">
+            <label for="sizeSlider">
+                Output Size
+                <span><span id="sizeValue">150</span> px</span>
+            </label>
+            <input
+                type="range"
+                id="sizeSlider"
+                min="40"
+                max="400"
+                value="150"
+                step="10"
+            >
+        </div>
+
+        <label class="checkbox-row" for="removeBgCheck">
+            <input type="checkbox" id="removeBgCheck">
+            <span>Remove Background (Alpha)</span>
+        </label>
+
+        <div id="colorField" class="control-group">
+            <label for="bgColorPicker">Change Background Color</label>
+            <input type="color" id="bgColorPicker" value="#a855f7">
+        </div>
+
+        <button id="downloadBtn" class="download-btn" type="button" disabled>
+            Download PNG Asset
+        </button>
+    </aside>
+
+    <main class="main-workspace">
+        <input
+            type="search"
+            id="searchBox"
+            class="search-bar"
+            placeholder="Search by filename or tag, for example cream, hand, drop..."
+            autocomplete="off"
+        >
+
+        <div class="layout-body">
+            <div id="iconGrid" class="gallery-grid" aria-live="polite"></div>
+
+            <section class="preview-panel" aria-labelledby="previewHeading">
+                <div class="preview-title-row">
+                    <h3 id="previewHeading">Live Canvas Frame</h3>
+                    <span id="previewStatus" class="preview-status"></span>
+                </div>
+                <div class="canvas-container">
+                    <canvas id="liveCanvas" hidden></canvas>
+                    <p id="placeholderText">
+                        Select an illustration asset to preview it.
+                    </p>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        (() => {
+            "use strict";
+
+            let selectedIcon = null;
+            let iconSize = 150;
+            let iconsDataCache = [];
+            let previewSequence = 0;
+            let previewTimer = null;
+
+            const iconGrid = document.getElementById("iconGrid");
+            const searchBox = document.getElementById("searchBox");
+            const sizeSlider = document.getElementById("sizeSlider");
+            const sizeValue = document.getElementById("sizeValue");
+            const removeBgCheck = document.getElementById("removeBgCheck");
+            const bgColorPicker = document.getElementById("bgColorPicker");
+            const colorField = document.getElementById("colorField");
+            const liveCanvas = document.getElementById("liveCanvas");
+            const placeholderText = document.getElementById("placeholderText");
+            const previewStatus = document.getElementById("previewStatus");
+            const downloadBtn = document.getElementById("downloadBtn");
+
+            function currentSettings() {
+                return {
+                    removeBackground: removeBgCheck.checked,
+                    backgroundColor: bgColorPicker.value,
+                };
+            }
+
+            function processUrl(icon, size, options = {}) {
+                const settings = options.original
+                    ? { removeBackground: false, backgroundColor: null }
+                    : currentSettings();
+
+                const parameters = new URLSearchParams();
+                parameters.set("width", String(size));
+                parameters.set("height", String(size));
+                parameters.set(
+                    "remove_bg",
+                    settings.removeBackground ? "true" : "false"
+                );
+
+                if (!settings.removeBackground && settings.backgroundColor) {
+                    parameters.set("bg_color", settings.backgroundColor);
+                }
+
+                if (options.download) {
+                    parameters.set("download", "true");
+                }
+
+                return `/api/process/${encodeURIComponent(icon.id)}?${parameters.toString()}`;
+            }
+
+            function setPreviewStatus(message, isError = false) {
+                previewStatus.textContent = message;
+                previewStatus.classList.toggle("error", isError);
+            }
+
+            function updateControlState() {
+                const transparent = removeBgCheck.checked;
+                colorField.style.opacity = transparent ? "0.35" : "1";
+                bgColorPicker.disabled = transparent;
+            }
+
+            function updateSizeLabel() {
+                iconSize = Number.parseInt(sizeSlider.value, 10) || 150;
+                sizeValue.textContent = String(iconSize);
+            }
+
+            function drawUrlToCanvas(canvas, url, targetSize, sequence) {
+                const context = canvas.getContext("2d");
+                const image = new Image();
+                image.decoding = "async";
+
+                image.onload = () => {
+                    if (sequence !== previewSequence) {
+                        return;
+                    }
+
+                    canvas.width = targetSize;
+                    canvas.height = targetSize;
+                    context.clearRect(0, 0, targetSize, targetSize);
+                    context.imageSmoothingEnabled = true;
+                    context.imageSmoothingQuality = "high";
+                    context.drawImage(image, 0, 0, targetSize, targetSize);
+
+                    canvas.hidden = false;
+                    placeholderText.hidden = true;
+                    downloadBtn.disabled = false;
+                    setPreviewStatus(`${targetSize} x ${targetSize} PNG`);
+                };
+
+                image.onerror = () => {
+                    if (sequence !== previewSequence) {
+                        return;
+                    }
+
+                    canvas.hidden = true;
+                    placeholderText.hidden = false;
+                    placeholderText.textContent =
+                        "The image could not be loaded. Confirm that the PNG exists in the icons folder and that Flask is running.";
+                    downloadBtn.disabled = true;
+                    setPreviewStatus("Preview failed", true);
+                };
+
+                image.src = url;
+            }
+
+            function renderLivePreview() {
+                updateSizeLabel();
+
+                if (!selectedIcon) {
+                    return;
+                }
+
+                const sequence = ++previewSequence;
+                setPreviewStatus("Processing...");
+                downloadBtn.disabled = true;
+
+                drawUrlToCanvas(
+                    liveCanvas,
+                    processUrl(selectedIcon, iconSize),
+                    iconSize,
+                    sequence
+                );
+            }
+
+            function schedulePreview() {
+                updateSizeLabel();
+                window.clearTimeout(previewTimer);
+                previewTimer = window.setTimeout(renderLivePreview, 90);
+            }
+
+            function formatIconName(filename) {
+                const lastDot = filename.lastIndexOf(".");
+                const withoutExtension = lastDot > 0
+                    ? filename.slice(0, lastDot)
+                    : filename;
+                return withoutExtension.replace(/_/g, " ");
+            }
+
+            function selectIcon(icon, card) {
+                selectedIcon = icon;
+                document.querySelectorAll(".icon-card").forEach((item) => {
+                    item.classList.remove("active");
+                    item.setAttribute("aria-pressed", "false");
+                });
+                card.classList.add("active");
+                card.setAttribute("aria-pressed", "true");
+                placeholderText.textContent = "Processing preview...";
+                renderLivePreview();
+            }
+
+            function renderGallery(filter = "") {
+                const query = filter.trim().toLowerCase();
+                const filteredIcons = iconsDataCache.filter((icon) => {
+                    return (
+                        icon.src.toLowerCase().includes(query) ||
+                        icon.tags.some((tag) => tag.toLowerCase().includes(query))
+                    );
+                });
+
+                iconGrid.replaceChildren();
+
+                if (filteredIcons.length === 0) {
+                    const emptyMessage = document.createElement("div");
+                    emptyMessage.className = "no-results";
+                    emptyMessage.textContent = "No matching icons were found.";
+                    iconGrid.appendChild(emptyMessage);
+                    return;
+                }
+
+                filteredIcons.forEach((icon) => {
+                    const card = document.createElement("button");
+                    card.type = "button";
+                    card.className = "icon-card";
+                    card.setAttribute("aria-pressed", "false");
+                    card.setAttribute(
+                        "aria-label",
+                        `Select ${formatIconName(icon.src)}`
+                    );
+
+                    if (selectedIcon && selectedIcon.id === icon.id) {
+                        card.classList.add("active");
+                        card.setAttribute("aria-pressed", "true");
+                    }
+
+                    const thumbnail = document.createElement("img");
+                    thumbnail.alt = "";
+                    thumbnail.loading = "lazy";
+                    thumbnail.src = `/icons/${encodeURIComponent(icon.src)}`;
+                    thumbnail.addEventListener("error", () => {
+                        thumbnail.style.visibility = "hidden";
+                    });
+                    card.appendChild(thumbnail);
+
+                    const name = document.createElement("p");
+                    name.textContent = formatIconName(icon.src);
+                    card.appendChild(name);
+
+                    if (!icon.available) {
+                        card.disabled = true;
+                        const missing = document.createElement("span");
+                        missing.className = "missing-label";
+                        missing.textContent = "File missing";
+                        card.appendChild(missing);
+                    } else {
+                        card.addEventListener("click", () => selectIcon(icon, card));
+                    }
+
+                    iconGrid.appendChild(card);
+                });
+            }
+
+            async function fetchGallery() {
+                iconGrid.innerHTML = '<div class="no-results">Loading icon catalog...</div>';
+
+                try {
+                    const response = await fetch("/api/search", {
+                        headers: { Accept: "application/json" },
+                        cache: "no-store",
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Catalog request failed with status ${response.status}`);
+                    }
+
+                    const payload = await response.json();
+                    if (!Array.isArray(payload)) {
+                        throw new Error("The server returned an invalid catalog response");
+                    }
+
+                    iconsDataCache = payload;
+                    renderGallery(searchBox.value);
+                } catch (error) {
+                    console.error(error);
+                    iconGrid.innerHTML = "";
+                    const errorMessage = document.createElement("div");
+                    errorMessage.className = "gallery-error";
+                    errorMessage.textContent =
+                        "Could not load the icon catalog. Start app.py through Flask and refresh this page.";
+                    iconGrid.appendChild(errorMessage);
+                }
+            }
+
+            function downloadCurrentIcon() {
+                if (!selectedIcon) {
+                    return;
+                }
+
+                updateSizeLabel();
+                const anchor = document.createElement("a");
+                const filename = formatIconName(selectedIcon.src).replace(/\s+/g, "_");
+                anchor.href = processUrl(selectedIcon, iconSize, { download: true });
+                anchor.download = `${filename}_custom.png`;
+                document.body.appendChild(anchor);
+                anchor.click();
+                anchor.remove();
+            }
+
+            searchBox.addEventListener("input", (event) => {
+                renderGallery(event.target.value);
+            });
+
+            sizeSlider.addEventListener("input", schedulePreview);
+            bgColorPicker.addEventListener("input", schedulePreview);
+
+            removeBgCheck.addEventListener("change", () => {
+                updateControlState();
+                schedulePreview();
+            });
+
+            downloadBtn.addEventListener("click", downloadCurrentIcon);
+
+            updateSizeLabel();
+            updateControlState();
+            fetchGallery();
+        })();
+    </script>
+</body>
+</html>
