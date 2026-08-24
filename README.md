@@ -1,48 +1,95 @@
 # Plix Icon Editor
 
-A Flask and Pillow icon customizer with a Supabase-backed catalog. Bundled
-icons remain in `icons/`, while teammate uploads are stored in Supabase Storage
-and processed in memory by the same background-removal and recoloring pipeline.
+> **Asset Notice:** Some visual assets in this repository belong to PLIX and/or their respective rights holders. Their inclusion does not grant permission for redistribution or commercial reuse. Please see the Intellectual Property & Usage Notice below.
 
-## Server configuration
+> This repository is shared primarily as a technical portfolio/project reference. PLIX-owned visual assets remain proprietary and should not be reused without authorization.
 
-Set these variables in Render. Keep all four server-side and never expose them
-in browser code:
+A web-based icon customization and management tool built for fast product-design workflows.
 
-- `SUPABASE_URL` — the project API URL
-- `SUPABASE_SERVICE_ROLE_KEY` — a service-role or server secret key
-- `SUPABASE_BUCKET` — the Storage bucket name (`icon-assets` in production)
-- `ADMIN_PASSWORD` — the password teammates use to open **Manage Icons**
+The application allows users to search, preview, customize, upload, manage, and download PNG icon assets through a simple interface. It uses Flask and Pillow for image processing, Supabase for cloud storage and icon metadata, and Render for deployment.
 
-The app expects `public.icons` to contain the catalog metadata used by the
-configured Supabase project and `public.search_icons_catalog` to provide the
-paginated public search. Public gallery pages contain 48 icons by default, and
-Storage-backed thumbnails load directly from the public Supabase Storage URL.
-Preview, recoloring, background removal, resizing, and downloads still run
-through Flask and Pillow. If Supabase is not configured or a catalog search
-temporarily fails, the public gallery gracefully falls back to scanning and
-paginating the repository's local PNG files. Administrative changes still
-require Supabase so that Render's ephemeral filesystem is never used for
-uploaded assets.
+## Features
 
-## Local development
+- Search icons by name, filename, tags, and detected colors
+- Preview icons before downloading
+- Resize PNG icons
+- Remove image backgrounds
+- Change background colors
+- Download customized PNG assets
+- Upload new icons through the browser
+- Edit icon names and search tags
+- Remove icons without modifying the source code
+- Automatic dominant color detection
+- Password-protected icon management
+- Supabase Storage for uploaded assets
+- Supabase PostgreSQL for icon metadata
+- Direct Supabase CDN thumbnail loading
+- Paginated icon gallery designed to support 500+ icons
+- Database-side full-text search
+- Local icon fallback if Supabase is unavailable
 
-```powershell
-python -m pip install -r requirements.txt
-python app.py
-```
+## Tech Stack
 
-Open `http://localhost:5000`. Without Supabase variables, local icons, search,
-preview, background processing, resize, and PNG download remain available.
+### Backend
+- Python
+- Flask
+- Pillow (PIL)
+- Gunicorn
 
-## Tests
+### Frontend
+- HTML5
+- CSS3
+- Vanilla JavaScript
+- Fetch API
 
-```powershell
-python -m unittest discover -s tests -v
-```
+### Database & Storage
+- Supabase PostgreSQL
+- Supabase Storage
+- PostgreSQL Full-Text Search
+- GIN Search Index
 
-The test suite uses an in-memory Supabase double. It covers public pagination,
-RPC search parameters, local fallback, direct public thumbnail URLs, upload
-validation, automatic color tagging, combination search, metadata edits, both
-removal modes, and processing a Storage-backed PNG without writing it to the
-local filesystem.
+### Deployment & Development
+- Render
+- Git
+- GitHub
+- Codex
+- Python unittest
+
+## Architecture
+
+```text
+                     Browser
+                        |
+               HTML + CSS + JavaScript
+                        |
+                     Flask API
+                    /         \
+                   /           \
+                  v             v
+        Supabase Database     Pillow
+        metadata + search     image processing
+                  |
+                  v
+          Supabase Storage
+             PNG Assets
+                  |
+                  v
+          Supabase CDN
+           thumbnails
+
+## Intellectual Property & Usage Notice
+
+The icon assets, illustrations, visual elements, product-related graphics, and other brand-specific creative materials included in or referenced by this project are the property of **PLIX / its respective rights holders**.
+
+These assets are included only for the purpose of demonstrating and maintaining this internal design-tool workflow.
+
+### Important
+
+- The PLIX icons and brand assets are **not owned by the repository author**.
+- Do not copy, redistribute, resell, republish, modify, or commercially use PLIX-owned assets without appropriate authorization.
+- Do not treat the inclusion of these assets in this repository as a grant of license, ownership, or permission for independent use.
+- Any use of PLIX trademarks, logos, icons, illustrations, product graphics, or other proprietary material should follow PLIX's internal brand guidelines and applicable intellectual-property rights.
+- If you fork, clone, reuse, or adapt this project's source code, remove or replace PLIX-owned visual assets unless you have permission to use them.
+- The source code of this project and the ownership rights of the included brand assets should be treated separately.
+
+Please use all PLIX-owned materials carefully and preserve the rights of PLIX and any other applicable rights holders.
